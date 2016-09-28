@@ -1,21 +1,22 @@
 package main
 
 import (
-// Input/Output
+	// Input/Output
 	"bytes"
 	"io"
 	"io/ioutil"
 	"log"
 	"os"
 
-// Time
-	"time"
+	// Time
 	"strconv"
+	"time"
 
-// Webserver
+	// Webserver
 	"net/http"
+	"net/url"
 
-// AWS
+	// AWS
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -23,19 +24,20 @@ import (
 )
 
 var (
-// Loggers
-	Info    *log.Logger
-	Error   *log.Logger
+	// Loggers
+	Info  *log.Logger
+	Error *log.Logger
 
-// Health
-	healthFile string
+	// Health
+	healthFile               string
 	healthCheckCacheInterval int64
-	lastHealthCheckTime int64
+	lastHealthCheckTime      int64
 
-// Web server
-	port string
+	// Web server
+	port  string
+	proxy string
 
-// AWS settings
+	// AWS settings
 	awsRegion, awsBucket string
 	s3Session            *s3.S3
 )
@@ -64,6 +66,8 @@ func getAllEnvVariables() {
 	// Get the AWS credentials
 	awsRegion = getEnvOrDefault("AWS_REGION", "eu-west-1", false)
 	awsBucket = getEnvOrDefault("AWS_BUCKET", "", true)
+	proxy = getEnvOrDefault("HTTP_PROXY", "", false)
+
 	getEnvOrDefault("AWS_ACCESS_KEY_ID", "", true)
 	getEnvOrDefault("AWS_SECRET_ACCESS_KEY", "", true)
 
@@ -110,7 +114,7 @@ func serveS3File(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		serveDeleteS3File(path, w, r)
 	default:
-		http.Error(w, "Method " + method + " not supported", http.StatusMethodNotAllowed)
+		http.Error(w, "Method "+method+" not supported", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -167,7 +171,7 @@ func servePutS3File(filePath string, w http.ResponseWriter, r *http.Request) {
 	}
 
 	// File has been created TODO do not return a http.StatusCreated if the file was updated
-	http.Redirect(w, r, "/" + filePath, http.StatusCreated)
+	http.Redirect(w, r, "/"+filePath, http.StatusCreated)
 }
 
 // Serve a DELETE request for a S3 file
@@ -190,27 +194,43 @@ func handleHTTPException(path string, w http.ResponseWriter, err error) (e error
 			// aws error
 			switch awsError.Code() {
 			case "NoSuchKey":
-				http.Error(w, "Path '" + path + "' not found: " + awsError.Message(), http.StatusNotFound)
+				http.Error(w, "Path '"+path+"' not found: "+awsError.Message(), http.StatusNotFound)
 			default:
 				origErr := awsError.OrigErr()
 				cause := ""
 				if origErr != nil {
 					cause = " (Cause: " + origErr.Error() + ")"
 				}
-				http.Error(w, "An internal error occurred: " + awsError.Code() + " = " + awsError.Message() + cause, http.StatusInternalServerError)
+				http.Error(w, "An internal error occurred: "+awsError.Code()+" = "+awsError.Message()+cause, http.StatusInternalServerError)
 			}
 		} else {
 			// golang error
-			http.Error(w, "An internal error occurred: " + err.Error(), http.StatusInternalServerError)
+			http.Error(w, "An internal error occurred: "+err.Error(), http.StatusInternalServerError)
 		}
 	}
 	return err
 }
 
+func buildHTTPClient() *http.Client {
+	if proxy != "" {
+		proxyUrl, _ := url.Parse(proxy)
+		proxyHandler := http.ProxyURL(proxyUrl)
+
+		proxyTransport := &http.Transport{
+			Proxy: proxyHandler,
+		}
+		return &http.Client{
+			Transport: proxyTransport,
+		}
+	} else {
+		return &http.Client{}
+	}
+}
+
 // Initialise loggers
 func initLogging(infoHandle io.Writer, errorHandle io.Writer) {
-	Info = log.New(infoHandle, "INFO: ", log.Ldate | log.Ltime | log.Lshortfile)
-	Error = log.New(errorHandle, "ERROR: ", log.Ldate | log.Ltime | log.Lshortfile)
+	Info = log.New(infoHandle, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
+	Error = log.New(errorHandle, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile)
 }
 
 // Main method
@@ -224,13 +244,16 @@ func main() {
 	getAllEnvVariables()
 
 	// Set up the S3 connection
-	s3Session = s3.New(session.New(), &aws.Config{Region: aws.String(awsRegion)})
+	s3Session = s3.New(session.New(), &aws.Config{
+		Region:     aws.String(awsRegion),
+		HTTPClient: buildHTTPClient(),
+	})
 
 	Info.Println("Startup complete")
 
 	// Run the webserver
 	http.HandleFunc("/", serveS3File)
-	err := http.ListenAndServe(":" + port, nil)
+	err := http.ListenAndServe(":"+port, nil)
 	if err != nil {
 		Error.Println("ListenAndServe: ", err)
 		os.Exit(1)
