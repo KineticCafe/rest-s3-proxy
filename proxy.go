@@ -35,6 +35,7 @@ var (
 
 	// Web server
 	port  string
+	proxy string
 
 	// AWS settings
 	awsRegion, awsBucket string
@@ -65,6 +66,8 @@ func getAllEnvVariables() {
 	// Get the AWS credentials
 	awsRegion = getEnvOrDefault("AWS_REGION", "eu-west-1", false)
 	awsBucket = getEnvOrDefault("AWS_BUCKET", "", true)
+	proxy = getEnvOrDefault("HTTP_PROXY", "", false)
+
 	getEnvOrDefault("AWS_ACCESS_KEY_ID", "", true)
 	getEnvOrDefault("AWS_SECRET_ACCESS_KEY", "", true)
 
@@ -208,6 +211,22 @@ func handleHTTPException(path string, w http.ResponseWriter, err error) (e error
 	return err
 }
 
+func buildHTTPClient() *http.Client {
+	if proxy != "" {
+		proxyUrl, _ := url.Parse(proxy)
+		proxyHandler := http.ProxyURL(proxyUrl)
+
+		proxyTransport := &http.Transport{
+			Proxy: proxyHandler,
+		}
+		return &http.Client{
+			Transport: proxyTransport,
+		}
+	} else {
+		return &http.Client{}
+	}
+}
+
 // Initialise loggers
 func initLogging(infoHandle io.Writer, errorHandle io.Writer) {
 	Info = log.New(infoHandle, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
@@ -225,7 +244,10 @@ func main() {
 	getAllEnvVariables()
 
 	// Set up the S3 connection
-	s3Session = s3.New(session.New(), &aws.Config{Region: aws.String(awsRegion)})
+	s3Session = s3.New(session.New(), &aws.Config{
+		Region:     aws.String(awsRegion),
+		HTTPClient: buildHTTPClient(),
+	})
 
 	Info.Println("Startup complete")
 
