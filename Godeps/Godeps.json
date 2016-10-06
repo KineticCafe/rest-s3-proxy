@@ -129,6 +129,18 @@
 			"Rev": "6061082a165c9c3e8fb9c681a287af83c2464fb3"
 		},
 		{
+			"ImportPath": "github.com/facebookgo/clock",
+			"Rev": "600d898af40aa09a7a93ecb9265d87b0504b6f03"
+		},
+		{
+			"ImportPath": "github.com/facebookgo/httpdown",
+			"Rev": "a3b1354551a26449fbe05f5d855937f6e7acbd71"
+		},
+		{
+			"ImportPath": "github.com/facebookgo/stats",
+			"Rev": "1b76add642e42c6ffba7211ad7b3939ce654526e"
+		},
+		{
 			"ImportPath": "github.com/go-ini/ini",
 			"Comment": "v1.21.1",
 			"Rev": "6e4869b434bd001f6983749881c7ead3545887d8"
