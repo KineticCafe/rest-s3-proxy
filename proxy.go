@@ -84,6 +84,12 @@ func getAllEnvVariables() {
 	healthCheckCacheInterval = healthIntervalInt
 }
 
+func addEtagToResponse(etag *string, w http.ResponseWriter) {
+	if *etag != "" {
+		w.Header().Set("ETag", *etag)
+	}
+}
+
 // Serve a request for a S3 file
 func serveS3File(w http.ResponseWriter, r *http.Request) {
 	var method = r.Method
@@ -151,6 +157,8 @@ func serveGetS3File(filePath string, w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s3Session.GetObject(params)
 
+	addEtagToResponse(resp.ETag, w)
+
 	if handleHTTPException(filePath, w, err) != nil {
 		return
 	}
@@ -170,12 +178,10 @@ func servePutS3File(filePath string, w http.ResponseWriter, r *http.Request) {
 
 	params := &s3.PutObjectInput{Bucket: aws.String(awsBucket), Key: aws.String(filePath), Body: bytes.NewReader(b)}
 
-	var putResp *s3.PutObjectOutput
-	putResp, err = s3Session.PutObject(params)
+	var resp *s3.PutObjectOutput
+	resp, err = s3Session.PutObject(params)
 
-	if *putResp.ETag != "" {
-		w.Header().Set("ETag", *putResp.ETag)
-	}
+	addEtagToResponse(resp.ETag, w)
 
 	if handleHTTPException(filePath, w, err) != nil {
 		return
