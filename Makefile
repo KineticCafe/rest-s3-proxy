@@ -14,7 +14,9 @@ help:
 	echo $(BUILD_DATE)
 
 godeps:
+ifneq ($(FAST),1)
 	go get github.com/tools/godep
+endif
 
 build: godeps
 	@godep go build $(LDFLAGS) -o $(BUILD_TARGET) proxy.go

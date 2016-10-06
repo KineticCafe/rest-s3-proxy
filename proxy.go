@@ -1,27 +1,21 @@
 package main
 
 import (
-	// Input/Output
 	"bytes"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
-
-	// Time
 	"strconv"
 	"time"
 
-	// Webserver
-	"net/http"
-
-	// AWS
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/facebookgo/httpdown"
 )
 
 var (
@@ -54,14 +48,14 @@ func getEnvOrDefault(envName, defaultVal string, fatal bool) (envVal string) {
 	envVal = os.Getenv(envName)
 	if len(envVal) == 0 {
 		if fatal {
-			errorLog.Println(fmt.Sprintf("Unable to start as required env %s is not defined", envName))
+			errorLog.Printf("Unable to start as required env %s is not defined\n", envName)
 			os.Exit(1)
 		}
 		envVal = defaultVal
-		infoLog.Println(fmt.Sprintf("Using default %s: %s", envName, envVal))
+		infoLog.Printf("Using default %s: %s\n", envName, envVal)
 	} else {
 		if envName != "AWS_ACCESS_KEY_ID" && envName != "AWS_SECRET_ACCESS_KEY" {
-			infoLog.Println(fmt.Sprintf("%s: %s", envName, envVal))
+			infoLog.Printf("%s: %s\n", envName, envVal)
 		}
 	}
 	return
@@ -111,7 +105,7 @@ func serveS3File(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	infoLog.Println("Handling " + method + " request for '" + path + "'")
+	infoLog.Printf("Handling %s for '%s'\n", method, path)
 
 	switch method {
 	case "GET":
@@ -131,7 +125,7 @@ func serveHealth(w http.ResponseWriter, r *http.Request) {
 	currentTime := time.Now().Unix()
 
 	if (currentTime - lastHealthCheckTime) > healthCheckCacheInterval {
-		infoLog.Println("Making health check for path '" + healthFile + "'")
+		infoLog.Printf("Making health check for path '%s'\n", healthFile)
 
 		// Check that we have read permissions on the status file (we may not have listing permissions)
 		params := &s3.GetObjectInput{Bucket: aws.String(awsBucket), Key: aws.String(healthFile)}
@@ -151,6 +145,10 @@ func serveHealth(w http.ResponseWriter, r *http.Request) {
 // Serve a GET request for a S3 file
 func serveGetS3File(filePath string, w http.ResponseWriter, r *http.Request) {
 	params := &s3.GetObjectInput{Bucket: aws.String(awsBucket), Key: aws.String(filePath)}
+	etag := r.Header.Get("ETag")
+	if etag != "" {
+		params.IfNoneMatch = &etag
+	}
 	resp, err := s3Session.GetObject(params)
 
 	if handleHTTPException(filePath, w, err) != nil {
@@ -171,7 +169,13 @@ func servePutS3File(filePath string, w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := &s3.PutObjectInput{Bucket: aws.String(awsBucket), Key: aws.String(filePath), Body: bytes.NewReader(b)}
-	_, err = s3Session.PutObject(params)
+
+	var putResp *s3.PutObjectOutput
+	putResp, err = s3Session.PutObject(params)
+
+	if *putResp.ETag != "" {
+		w.Header().Set("ETag", *putResp.ETag)
+	}
 
 	if handleHTTPException(filePath, w, err) != nil {
 		return
@@ -200,6 +204,8 @@ func handleHTTPException(path string, w http.ResponseWriter, err error) (e error
 		if awsError, ok := err.(awserr.Error); ok {
 			// aws error
 			switch awsError.Code() {
+			case "NotModified":
+				http.Error(w, "Object not modified", http.StatusNotModified)
 			case "NoSuchKey":
 				http.Error(w, "Path '"+path+"' not found: "+awsError.Message(), http.StatusNotFound)
 			default:
@@ -227,7 +233,7 @@ func initLogging(infoHandle io.Writer, errorHandle io.Writer) {
 // Main method
 func main() {
 	initLogging(os.Stdout, os.Stderr)
-	infoLog.Println(fmt.Sprintf("%s: %s (%s)", filepath.Base(os.Args[0]), BuildDate, CommitHash))
+	infoLog.Printf("%s: %s (%s)\n", filepath.Base(os.Args[0]), BuildDate, CommitHash)
 
 	// Reset health check status
 	lastHealthCheckTime = 0
@@ -242,9 +248,14 @@ func main() {
 
 	// Run the webserver
 	http.HandleFunc("/", serveS3File)
-	err := http.ListenAndServe(":"+port, nil)
-	if err != nil {
-		errorLog.Println("ListenAndServe: ", err)
-		os.Exit(1)
+
+	server := &http.Server{Addr: ":" + port}
+	hd := &httpdown.HTTP{
+		StopTimeout: 10 * time.Second,
+		KillTimeout: 1 * time.Second,
+	}
+
+	if err := httpdown.ListenAndServe(server, hd); err != nil {
+		panic(err)
 	}
 }
