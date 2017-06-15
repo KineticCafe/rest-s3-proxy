@@ -85,7 +85,7 @@ func getAllEnvVariables() {
 }
 
 func addEtagToResponse(etag *string, w http.ResponseWriter) {
-	if *etag != "" {
+	if etag != nil && *etag != "" {
 		w.Header().Set("ETag", *etag)
 	}
 }
@@ -207,9 +207,12 @@ func serveDeleteS3File(filePath string, w http.ResponseWriter, r *http.Request) 
 // Handle an exception and write to response
 func handleHTTPException(path string, w http.ResponseWriter, err error) (e error) {
 	if err != nil {
+		errorLog.Printf("Error while accessing the path %q: %s", path, err)
 		if awsError, ok := err.(awserr.Error); ok {
 			// aws error
 			switch awsError.Code() {
+			case "MissingContentLength":
+				http.Error(w, "Bad Request", http.StatusBadRequest)
 			case "NotModified":
 				http.Error(w, "Object not modified", http.StatusNotModified)
 			case "NoSuchKey":
